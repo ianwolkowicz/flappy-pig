@@ -1,0 +1,640 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Flappy Pig</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #2c3e50;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    overflow: hidden;
+  }
+  canvas {
+    border-radius: 8px;
+    box-shadow: 0 0 40px rgba(0,0,0,0.5);
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+
+// Responsive canvas size
+const W = canvas.width = 400;
+const H = canvas.height = 600;
+
+// Game state
+let pig, pipes, score, bestScore = 0, gameState, frameCount, oinks, particles, clouds;
+
+const GRAVITY = 0.45;
+const FLAP_POWER = -7.5;
+const PIPE_WIDTH = 60;
+const PIPE_GAP = 155;
+const PIPE_SPEED = 2.5;
+const PIPE_SPAWN_RATE = 100;
+const GROUND_HEIGHT = 60;
+
+// ---- Drawing helpers ----
+
+function drawCloud(x, y, size) {
+  ctx.save();
+  ctx.globalAlpha = 0.7;
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(x, y, size * 0.5, 0, Math.PI * 2);
+  ctx.arc(x + size * 0.35, y - size * 0.2, size * 0.4, 0, Math.PI * 2);
+  ctx.arc(x - size * 0.35, y - size * 0.15, size * 0.35, 0, Math.PI * 2);
+  ctx.arc(x + size * 0.15, y - size * 0.35, size * 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
+function drawBackground() {
+  // Sky gradient
+  const skyGrad = ctx.createLinearGradient(0, 0, 0, H - GROUND_HEIGHT);
+  skyGrad.addColorStop(0, '#87CEEB');
+  skyGrad.addColorStop(0.6, '#B0E0F6');
+  skyGrad.addColorStop(1, '#E0F7FA');
+  ctx.fillStyle = skyGrad;
+  ctx.fillRect(0, 0, W, H - GROUND_HEIGHT);
+
+  // Clouds
+  for (const c of clouds) {
+    drawCloud(c.x, c.y, c.size);
+  }
+
+  // Ground
+  const groundGrad = ctx.createLinearGradient(0, H - GROUND_HEIGHT, 0, H);
+  groundGrad.addColorStop(0, '#4CAF50');
+  groundGrad.addColorStop(0.15, '#43A047');
+  groundGrad.addColorStop(1, '#2E7D32');
+  ctx.fillStyle = groundGrad;
+  ctx.fillRect(0, H - GROUND_HEIGHT, W, GROUND_HEIGHT);
+
+  // Ground line detail
+  ctx.fillStyle = '#66BB6A';
+  ctx.fillRect(0, H - GROUND_HEIGHT, W, 4);
+
+  // Grass tufts
+  ctx.fillStyle = '#66BB6A';
+  for (let i = 0; i < W; i += 15) {
+    const offset = (frameCount * 1.5 + i) % W;
+    const gx = (W - offset + i) % W;
+    ctx.beginPath();
+    ctx.moveTo(gx, H - GROUND_HEIGHT + 2);
+    ctx.lineTo(gx + 4, H - GROUND_HEIGHT - 6);
+    ctx.lineTo(gx + 8, H - GROUND_HEIGHT + 2);
+    ctx.fill();
+  }
+}
+
+function drawPig(x, y, rotation, wingAngle) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(rotation);
+
+  const s = 1; // scale
+
+  // Body
+  ctx.fillStyle = '#FFB6C1';
+  ctx.beginPath();
+  ctx.ellipse(0, 0, 22 * s, 18 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#E91E7D';
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // Belly highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.3)';
+  ctx.beginPath();
+  ctx.ellipse(-3, 3, 12 * s, 9 * s, -0.2, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Wings
+  ctx.save();
+  ctx.translate(-5 * s, -14 * s);
+  ctx.rotate(wingAngle);
+  ctx.fillStyle = '#FF9CAD';
+  ctx.beginPath();
+  ctx.ellipse(0, -8 * s, 10 * s, 7 * s, -0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#E91E7D';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+
+  ctx.save();
+  ctx.translate(5 * s, -14 * s);
+  ctx.rotate(-wingAngle);
+  ctx.fillStyle = '#FF9CAD';
+  ctx.beginPath();
+  ctx.ellipse(0, -8 * s, 10 * s, 7 * s, 0.3, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#E91E7D';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
+
+  // Ears
+  ctx.fillStyle = '#FF9CAD';
+  ctx.beginPath();
+  ctx.ellipse(-14 * s, -13 * s, 6 * s, 8 * s, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#FFB6C1';
+  ctx.beginPath();
+  ctx.ellipse(-14 * s, -12 * s, 3.5 * s, 5 * s, -0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.fillStyle = '#FF9CAD';
+  ctx.beginPath();
+  ctx.ellipse(14 * s, -13 * s, 6 * s, 8 * s, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#FFB6C1';
+  ctx.beginPath();
+  ctx.ellipse(14 * s, -12 * s, 3.5 * s, 5 * s, 0.4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Snout
+  ctx.fillStyle = '#FF8FA3';
+  ctx.beginPath();
+  ctx.ellipse(20 * s, 2 * s, 10 * s, 8 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#E91E7D';
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  // Nostrils
+  ctx.fillStyle = '#D4526E';
+  ctx.beginPath();
+  ctx.ellipse(19 * s, 0, 2.5 * s, 3 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.beginPath();
+  ctx.ellipse(24 * s, 0, 2.5 * s, 3 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Eyes
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.ellipse(8 * s, -6 * s, 6 * s, 7 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#333';
+  ctx.beginPath();
+  ctx.arc(10 * s, -6 * s, 3.5 * s, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.fillStyle = '#fff';
+  ctx.beginPath();
+  ctx.arc(11 * s, -8 * s, 1.5 * s, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Cute blush
+  ctx.fillStyle = 'rgba(255, 100, 130, 0.35)';
+  ctx.beginPath();
+  ctx.ellipse(14 * s, 6 * s, 5 * s, 3 * s, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Tail (curly)
+  ctx.strokeStyle = '#FF9CAD';
+  ctx.lineWidth = 2.5;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(-22 * s, 0);
+  const tailWag = Math.sin(frameCount * 0.15) * 0.3;
+  ctx.bezierCurveTo(-28 * s, -8 * s + tailWag * 5, -34 * s, 4 * s + tailWag * 5, -30 * s, -6 * s);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
+function drawPipe(pipe) {
+  const x = pipe.x;
+  const topH = pipe.topH;
+  const botY = topH + PIPE_GAP;
+
+  // Top pipe
+  drawPipeSection(x, 0, PIPE_WIDTH, topH, false);
+  // Bottom pipe
+  drawPipeSection(x, botY, PIPE_WIDTH, H - GROUND_HEIGHT - botY, true);
+}
+
+function drawPipeSection(x, y, w, h, isBottom) {
+  if (h <= 0) return;
+
+  // Pipe body
+  const grad = ctx.createLinearGradient(x, 0, x + w, 0);
+  grad.addColorStop(0, '#2E7D32');
+  grad.addColorStop(0.2, '#4CAF50');
+  grad.addColorStop(0.5, '#66BB6A');
+  grad.addColorStop(0.8, '#4CAF50');
+  grad.addColorStop(1, '#2E7D32');
+  ctx.fillStyle = grad;
+  ctx.fillRect(x, y, w, h);
+
+  // Pipe border
+  ctx.strokeStyle = '#1B5E20';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x, y, w, h);
+
+  // Pipe lip
+  const lipH = 20;
+  const lipExtra = 6;
+  const lipY = isBottom ? y : y + h - lipH;
+  const lipGrad = ctx.createLinearGradient(x - lipExtra, 0, x + w + lipExtra, 0);
+  lipGrad.addColorStop(0, '#1B5E20');
+  lipGrad.addColorStop(0.15, '#388E3C');
+  lipGrad.addColorStop(0.5, '#4CAF50');
+  lipGrad.addColorStop(0.85, '#388E3C');
+  lipGrad.addColorStop(1, '#1B5E20');
+  ctx.fillStyle = lipGrad;
+  ctx.fillRect(x - lipExtra, lipY, w + lipExtra * 2, lipH);
+  ctx.strokeStyle = '#1B5E20';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(x - lipExtra, lipY, w + lipExtra * 2, lipH);
+
+  // Highlight stripe
+  ctx.fillStyle = 'rgba(255,255,255,0.1)';
+  ctx.fillRect(x + 8, y, 6, h);
+}
+
+function drawParticles() {
+  for (const p of particles) {
+    ctx.save();
+    ctx.globalAlpha = p.life;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function drawOinks() {
+  for (const o of oinks) {
+    ctx.save();
+    ctx.globalAlpha = o.life;
+    ctx.font = `bold ${28 + (1 - o.life) * 20}px 'Segoe UI', sans-serif`;
+    ctx.fillStyle = '#FF1744';
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 3;
+    ctx.textAlign = 'center';
+    ctx.strokeText('OINK!', o.x, o.y);
+    ctx.fillText('OINK!', o.x, o.y);
+    ctx.restore();
+  }
+}
+
+function drawScore() {
+  // Main score
+  ctx.save();
+  ctx.font = 'bold 48px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.2)';
+  ctx.fillText(score, W / 2 + 2, 62);
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#333';
+  ctx.lineWidth = 4;
+  ctx.strokeText(score, W / 2, 60);
+  ctx.fillText(score, W / 2, 60);
+  ctx.restore();
+}
+
+function drawStartScreen() {
+  drawBackground();
+
+  // Floating pig
+  const bobY = Math.sin(frameCount * 0.05) * 10;
+  const wingA = Math.sin(frameCount * 0.12) * 0.4;
+  drawPig(W / 2, H / 2 - 60 + bobY, 0, wingA);
+
+  // Title
+  ctx.save();
+  ctx.font = 'bold 52px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.fillText('Flappy Pig', W / 2 + 3, 133);
+  ctx.fillStyle = '#FF6B9D';
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 5;
+  ctx.strokeText('Flappy Pig', W / 2, 130);
+  ctx.fillText('Flappy Pig', W / 2, 130);
+  ctx.restore();
+
+  // Subtitle
+  ctx.save();
+  const pulse = 0.7 + Math.sin(frameCount * 0.06) * 0.3;
+  ctx.globalAlpha = pulse;
+  ctx.font = '22px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#fff';
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 3;
+  ctx.strokeText('Tap, Click, or Press Space', W / 2, H / 2 + 40);
+  ctx.fillText('Tap, Click, or Press Space', W / 2, H / 2 + 40);
+  ctx.restore();
+
+  // Best score
+  if (bestScore > 0) {
+    ctx.save();
+    ctx.font = '18px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#FFD54F';
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.strokeText(`Best: ${bestScore}`, W / 2, H / 2 + 75);
+    ctx.fillText(`Best: ${bestScore}`, W / 2, H / 2 + 75);
+    ctx.restore();
+  }
+}
+
+function drawGameOver() {
+  // Dim overlay
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.45)';
+  ctx.fillRect(0, 0, W, H);
+
+  // Game Over panel
+  const panelW = 280;
+  const panelH = 220;
+  const panelX = (W - panelW) / 2;
+  const panelY = (H - panelH) / 2 - 20;
+
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+  ctx.beginPath();
+  roundRect(ctx, panelX, panelY, panelW, panelH, 16);
+  ctx.fill();
+  ctx.strokeStyle = '#FF6B9D';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  roundRect(ctx, panelX, panelY, panelW, panelH, 16);
+  ctx.stroke();
+
+  // Title
+  ctx.font = 'bold 36px "Segoe UI", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillStyle = '#FF1744';
+  ctx.fillText('Game Over!', W / 2, panelY + 50);
+
+  // Score
+  ctx.font = '22px "Segoe UI", sans-serif';
+  ctx.fillStyle = '#333';
+  ctx.fillText(`Score: ${score}`, W / 2, panelY + 95);
+
+  // Best
+  ctx.font = 'bold 22px "Segoe UI", sans-serif';
+  ctx.fillStyle = '#FFB300';
+  ctx.fillText(`Best: ${bestScore}`, W / 2, panelY + 130);
+
+  // New best indicator
+  if (score === bestScore && score > 0) {
+    ctx.font = 'bold 16px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#FF6B9D';
+    ctx.fillText('New Record!', W / 2, panelY + 155);
+  }
+
+  // Restart hint
+  const pulse = 0.6 + Math.sin(frameCount * 0.08) * 0.4;
+  ctx.globalAlpha = pulse;
+  ctx.font = '18px "Segoe UI", sans-serif';
+  ctx.fillStyle = '#888';
+  ctx.fillText('Tap to Restart', W / 2, panelY + 195);
+  ctx.globalAlpha = 1;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+}
+
+// ---- Game logic ----
+
+function init() {
+  pig = { x: 80, y: H / 2, vel: 0, rotation: 0, wingAngle: 0 };
+  pipes = [];
+  score = 0;
+  gameState = 'start';
+  frameCount = 0;
+  oinks = [];
+  particles = [];
+  clouds = [];
+  for (let i = 0; i < 5; i++) {
+    clouds.push({
+      x: Math.random() * W,
+      y: 30 + Math.random() * 150,
+      size: 25 + Math.random() * 35,
+      speed: 0.3 + Math.random() * 0.5
+    });
+  }
+}
+
+function flap() {
+  if (gameState === 'start') {
+    gameState = 'playing';
+    pig.vel = FLAP_POWER;
+    return;
+  }
+  if (gameState === 'playing') {
+    pig.vel = FLAP_POWER;
+    // Flap particles
+    for (let i = 0; i < 4; i++) {
+      particles.push({
+        x: pig.x - 10,
+        y: pig.y + 5,
+        vx: -1 - Math.random() * 2,
+        vy: 1 + Math.random() * 2,
+        size: 2 + Math.random() * 3,
+        life: 1,
+        color: '#FFD1DC'
+      });
+    }
+    return;
+  }
+  if (gameState === 'dead') {
+    init();
+    gameState = 'start';
+  }
+}
+
+function spawnPipe() {
+  const minTop = 60;
+  const maxTop = H - GROUND_HEIGHT - PIPE_GAP - 60;
+  const topH = minTop + Math.random() * (maxTop - minTop);
+  pipes.push({ x: W + 10, topH, scored: false });
+}
+
+function checkCollision() {
+  const px = pig.x;
+  const py = pig.y;
+  const pr = 16; // pig collision radius
+
+  // Ground / ceiling
+  if (py + pr > H - GROUND_HEIGHT || py - pr < 0) return true;
+
+  // Pipes
+  for (const pipe of pipes) {
+    const pipeLeft = pipe.x;
+    const pipeRight = pipe.x + PIPE_WIDTH;
+    const topBottom = pipe.topH;
+    const botTop = pipe.topH + PIPE_GAP;
+
+    if (px + pr > pipeLeft && px - pr < pipeRight) {
+      if (py - pr < topBottom || py + pr > botTop) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+function die() {
+  gameState = 'dead';
+  if (score > bestScore) bestScore = score;
+
+  // Oink!
+  oinks.push({ x: pig.x, y: pig.y - 30, life: 1.5 });
+
+  // Explosion particles
+  for (let i = 0; i < 15; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 2 + Math.random() * 4;
+    particles.push({
+      x: pig.x,
+      y: pig.y,
+      vx: Math.cos(angle) * speed,
+      vy: Math.sin(angle) * speed,
+      size: 3 + Math.random() * 4,
+      life: 1,
+      color: ['#FFB6C1', '#FF6B9D', '#FFD1DC', '#FF9CAD', '#FFD54F'][Math.floor(Math.random() * 5)]
+    });
+  }
+}
+
+function update() {
+  frameCount++;
+
+  // Clouds always move
+  for (const c of clouds) {
+    c.x -= c.speed;
+    if (c.x < -60) { c.x = W + 60; c.y = 30 + Math.random() * 150; }
+  }
+
+  // Update particles
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life -= 0.02;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+
+  // Update oinks
+  for (let i = oinks.length - 1; i >= 0; i--) {
+    oinks[i].y -= 1.2;
+    oinks[i].life -= 0.025;
+    if (oinks[i].life <= 0) oinks.splice(i, 1);
+  }
+
+  if (gameState !== 'playing') return;
+
+  // Pig physics
+  pig.vel += GRAVITY;
+  pig.y += pig.vel;
+  pig.rotation = Math.max(-0.5, Math.min(pig.vel * 0.06, 1.2));
+  pig.wingAngle = Math.sin(frameCount * 0.3) * 0.6;
+  if (pig.vel < 0) pig.wingAngle = Math.sin(frameCount * 0.5) * 0.8;
+
+  // Pipe spawning
+  if (frameCount % PIPE_SPAWN_RATE === 0) {
+    spawnPipe();
+  }
+
+  // Move pipes
+  for (let i = pipes.length - 1; i >= 0; i--) {
+    pipes[i].x -= PIPE_SPEED;
+    // Score
+    if (!pipes[i].scored && pipes[i].x + PIPE_WIDTH < pig.x) {
+      pipes[i].scored = true;
+      score++;
+    }
+    // Remove off-screen
+    if (pipes[i].x < -PIPE_WIDTH - 20) {
+      pipes.splice(i, 1);
+    }
+  }
+
+  // Collision
+  if (checkCollision()) {
+    die();
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, W, H);
+
+  if (gameState === 'start') {
+    drawStartScreen();
+    return;
+  }
+
+  drawBackground();
+
+  // Pipes
+  for (const pipe of pipes) {
+    drawPipe(pipe);
+  }
+
+  // Particles behind pig
+  drawParticles();
+
+  // Pig
+  drawPig(pig.x, pig.y, pig.rotation, pig.wingAngle);
+
+  // Oinks
+  drawOinks();
+
+  // Score
+  drawScore();
+
+  // Game over overlay
+  if (gameState === 'dead') {
+    drawGameOver();
+  }
+}
+
+function gameLoop() {
+  update();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+// ---- Input ----
+
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Space' || e.code === 'ArrowUp') {
+    e.preventDefault();
+    flap();
+  }
+});
+
+canvas.addEventListener('click', flap);
+canvas.addEventListener('touchstart', (e) => { e.preventDefault(); flap(); }, { passive: false });
+
+// ---- Start ----
+init();
+gameLoop();
+</script>
+</body>
+</html>
